@@ -1,5 +1,5 @@
 /**
-* Copyright Â© 2015-2016 Stanislav Semenov. All rights reserved.
+* Copyright © 2015-2016 Stanislav Semenov. All rights reserved.
 * Contacts: <stas.semenov@gmail.com>
 *
 * This C++ library implements algorithm for computing similarity between curves.
@@ -100,7 +100,7 @@ namespace Similarity
 			return 2 * matrix[N - 1][M - 1] / (double)(N + M + 1);
 		}
 
-		// Ramerâ€“Douglasâ€“Peucker algorithm
+		// Ramer–Douglas–Peucker algorithm
 		static int rdp_algorithm(const Points& input, Points& output, double eps)
 		{
 			if (input.empty())
@@ -185,6 +185,15 @@ namespace Similarity
 				double speed;
 				double density;
 				Contexts context;
+
+				PointFeatures()
+				{
+					curvature = 0;
+					center_dist = 0;
+					path_index = 0;
+					speed = 0;
+					density = 0;
+				}
 			};
 
 			double X;
@@ -271,50 +280,61 @@ namespace Similarity
 		{
 			struct CurveFeatures
 			{
-				double angle;
+				double slope_angle;
 				double speed;
+				double negative_X, negative_Y;
+				double positive_X, positive_Y;
+				double segments_dist;
+				double width, height;
+				double ratio;
+				int total_points;
+				int reduced_points;
 
 				CurveFeatures()
 				{
-					angle = 0;
+					slope_angle = 0;
 					speed = 0;
+					negative_X = 0, negative_Y = 0;
+					positive_X = 0, positive_Y = 0;
+					segments_dist = 0;
+					width = 0, height = 0;
+					ratio = 0;
+					total_points = 0;
+					reduced_points = 0;
 				}
 			};
 
 			Segments segments;
 			Points full_path;
 			CurveFeatures features;
-			int nTotalPoints;
-			int nReducedPoints;
 
 			Curve()
 			{
-				nTotalPoints = 0;
-				nReducedPoints = 0;
+				features.reduced_points = 0;
 			}
 
 			int calc_total_points(bool recalc = true)
 			{
 				if (!recalc)
-					return nTotalPoints;
+					return features.total_points;
 
-				nTotalPoints = 0;
+				features.total_points = 0;
 				for (size_t i = 0; i < segments.size(); i++)
-					nTotalPoints += segments[i].points.size();
+					features.total_points += segments[i].points.size();
 
-				return nTotalPoints;
+				return features.total_points;
 			}
 
 			int calc_reduced_points(bool recalc = true)
 			{
 				if (!recalc)
-					return nReducedPoints;
+					return features.reduced_points;
 
-				nReducedPoints = 0;
+				features.reduced_points = 0;
 				for (size_t i = 0; i < segments.size(); i++)
-					nReducedPoints += segments[i].points_reduced.size();
+					features.reduced_points += segments[i].points_reduced.size();
 
-				return nReducedPoints;
+				return features.reduced_points;
 			}
 
 			Point calc_median_speed()
@@ -365,7 +385,7 @@ namespace Similarity
 				for (size_t i = 0; i < segments.size(); i++) {
 					for (size_t j = 0; j < segments[i].points.size(); j++) {
 						Point * pPoint = &segments[i].points[j];
-						pPoint->features.path_index = (double)(nCur + 1) / (double)(nTotalPoints + 1);
+						pPoint->features.path_index = (double)(nCur + 1) / (double)(features.total_points + 1);
 						nCur++;
 					}
 				}
@@ -382,7 +402,7 @@ namespace Similarity
 									pPoint->features.density++;
 							}
 						}
-						pPoint->features.density /= (double)(nTotalPoints + 1);
+						pPoint->features.density /= (double)(features.total_points + 1);
 					}
 				}
 			}
@@ -531,8 +551,11 @@ namespace Similarity
 						if (i == j || !(abs(i - j) < window || (nFullPoints - j) < window))
 							continue;
 						Point * pPoint_to = &full_path[j];
-						int angle_bin = (int)max_min(0, a_bsz - 1, (int)floor(a_bsz * ((M_PI + calc_angle_abc(*pPoint, Point(), *pPoint_to)) / M_PI / 2.)));
-						int length_bin = (int)max_min(0, d_bsz - 1, (int)floor(d_bsz * (pPoint->distance_to_point(*pPoint_to) / sqrt(2.) / 2.)));
+						int angle_bin = (int)max_min(0, a_bsz - 1, (int)floor(((double)a_bsz) * ((M_PI + calc_angle_abc(*pPoint, Point(), *pPoint_to)) / M_PI / 2.)));
+						double exp_val = exp(pPoint->distance_to_point(*pPoint_to));
+						const double exp_const = exp(sqrt(8.)) - 1;
+						double lb = ((double)d_bsz - 1.) * (exp_val - 1.) / exp_const * features.speed / sqrt(2.);
+						int length_bin = (int)max_min(0, d_bsz - 1, (int)floor(lb));
 						pPoint->features.context.data[angle_bin][length_bin] += 1;
 					}
 				}
@@ -542,18 +565,81 @@ namespace Similarity
 				}
 			}
 
+			void calc_neg_pos()
+			{
+				for (size_t i = 0; i < segments.size(); i++) {
+					for (size_t j = 0; j < segments[i].points.size() - 1; j++) {
+						Point * pPoint_l = &segments[i].points[j];
+						Point * pPoint_r = &segments[i].points[j + 1];
+						double dX = pPoint_r->X - pPoint_l->X;
+						double dY = pPoint_r->Y - pPoint_l->Y;
+						if (dX > 0)
+							features.positive_X +=dX;
+						else
+							features.negative_X -= dX;
+						if (dY > 0)
+							features.positive_Y +=dY;
+						else
+							features.negative_Y -= dY;
+					}
+				}
+				double dX = features.positive_X + features.negative_X;
+				if (dX > 0) {
+					features.positive_X /= dX;
+					features.negative_X /= dX;
+				}
+				double dY = features.positive_Y + features.negative_Y;
+				if (dY > 0) {
+					features.positive_Y /= dY;
+					features.negative_Y /= dY;
+				}
+			}
+
+			void calc_segments_dist()
+			{
+				for (size_t i = 0; i < segments.size() - 1; i++) {
+					Point * pPoint_l = &segments[i].points[segments[i].points.size() - 1];
+					Point * pPoint_r = &segments[i + 1].points[0];
+					features.segments_dist += pPoint_l->distance_to_point(*pPoint_r);
+				}
+				if (segments.size() > 0)
+					features.segments_dist /= segments.size();
+			}
+
+			void calc_width_height()
+			{
+				double left = 0, right = 0, top = 0, bottom = 0;
+				for (size_t i = 0; i < segments.size(); i++) {
+					for (size_t j = 0; j < segments[i].points.size(); j++) {
+						Point * pPoint = &segments[i].points[j];
+						if (pPoint->X < left)
+							left = pPoint->X;
+						if (pPoint->X > right)
+							right = pPoint->X;
+						if (pPoint->Y < bottom)
+							bottom = pPoint->Y;
+						if (pPoint->Y > top)
+							top = pPoint->Y;
+					}
+				}
+				features.width = right - left;
+				features.height = top - bottom;
+				if (features.height > 0)
+					features.ratio = features.width / features.height;
+			}
+
 			void normalize()
 			{
 				calc_total_points();
 				calc_median_speed();
 				calc_path_index();
-				simplify_path();
-				move_to(calc_reduced_center());
-				features.angle = calc_angle_xy(calc_reduced_center(-1), calc_reduced_center(1));
-				rotate(features.angle);
-				scale();
 				calc_points_speed();
 				calc_density();
+				simplify_path();
+				move_to(calc_reduced_center());
+				features.slope_angle = calc_angle_xy(calc_reduced_center(-1), calc_reduced_center(1));
+				rotate(features.slope_angle);
+				scale();
 			}
 
 			void calc()
@@ -563,6 +649,9 @@ namespace Similarity
 				calc_curvatures();
 				calc_center_dists();
 				calc_shape_context();
+				calc_neg_pos();
+				calc_segments_dist();
+				calc_width_height();
 			}
 		};
 
